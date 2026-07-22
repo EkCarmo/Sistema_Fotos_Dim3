@@ -15,7 +15,7 @@ import numpy as np
 st.set_page_config(page_title="Gerador Dm3 - Pro", page_icon="📦", layout="wide")
 
 st.title("📦 Dm3 - Estúdio de Fotos Automático (Foco em Produtos)")
-st.write("Suba a foto do material. O sistema isola o produto e remove itens encostados sem estragar as bordas.")
+st.write("Suba a foto do material. O sistema isola, limpa itens encostados e centraliza automaticamente a mercadoria.")
 
 # 1. Carregar o fundo padrão (Gabarito)
 try:
@@ -32,25 +32,24 @@ def carregar_modelo_ia():
     except Exception:
         return new_session("u2netp")
 
-# 3. FUNÇÃO INTELIGENTE: Remove itens encostados usando Núcleo Seguro (não estraga partes metálicas)
+# 3. FUNÇÃO INTELIGENTE: Remove itens encostados usando Núcleo Seguro
 def limpar_itens_encostados(img_rgba, forca_corte):
     img_array = np.array(img_rgba)
     canal_alpha = img_array[:, :, 3]
     
-    # Cria uma máscara binária pura (0 para fundo, 255 para o que a IA recortou)
+    # Cria uma máscara binária pura
     _, binaria = cv2.threshold(canal_alpha, 20, 255, cv2.THRESH_BINARY)
     
-    # Se o usuário acionou o slider de força
     if forca_corte > 0:
         k_size = int(forca_corte)
         if k_size % 2 == 0:
             k_size += 1
         elemento_estrutura = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
         
-        # PASSO 1: Erosão temporária APENAS para quebrar pontes finas (arame do clipe e ponta do post-it)
+        # Erosão temporária para quebrar pontes finas (arames de clipes, post-its)
         mascara_erodida = cv2.erode(binaria, elemento_estrutura, iterations=1)
         
-        # PASSO 2: Achar os blocos separados e manter APENAS o corpo principal do produto
+        # Achar os blocos separados e manter APENAS o corpo principal
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mascara_erodida, connectivity=8)
         if num_labels > 1:
             maior_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
@@ -58,17 +57,12 @@ def limpar_itens_encostados(img_rgba, forca_corte):
         else:
             nucleo_produto = mascara_erodida
             
-        # PASSO 3 (O Segredo): Dilatar o núcleo de volta exatamente na mesma proporção!
-        # Isso devolve a borda original e lisa do grampeador, sem deixar o corte mastigado
+        # Dilata o núcleo de volta para devolver a borda original e lisa do produto
         mascara_restaurada = cv2.dilate(nucleo_produto, elemento_estrutura, iterations=1)
-        
-        # PASSO 4: Cruza a máscara restaurada com o alpha original da IA
-        # Tudo o que era clipe ou post-it fica de fora, mas o grampeador mantém 100% da sua borda natural
         alpha_final = cv2.bitwise_and(canal_alpha, mascara_restaurada)
     else:
         alpha_final = canal_alpha
         
-    # Suavização leve de acabamento anti-serrilhado
     alpha_suave = cv2.GaussianBlur(alpha_final, (3, 3), 0)
     img_array[:, :, 3] = alpha_suave
     
@@ -91,7 +85,6 @@ def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao):
     else:
         recorte_bruto = remove(img, session=sessao_ia)
         
-    # Aplica a remoção por Núcleo Seguro
     recorte_limpo = limpar_itens_encostados(recorte_bruto, forca_desconexao)
     return recorte_limpo
 
@@ -103,9 +96,17 @@ forca_sep = st.sidebar.slider(
     max_value=40, 
     value=0, 
     step=2, 
-    help="Deixe em 0 se a foto não tiver nada encostado. Se houver clipes ou papéis colados no produto, aumente gradualmente (ex: 10, 14 ou 18) até eles sumirem."
+    help="Deixe em 0 se a foto não tiver nada encostado. Se houver clipes ou papéis colados no produto, aumente gradualmente até eles sumirem."
 )
 modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
+
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 Modo de Centralização")
+modo_centro_massa = st.sidebar.checkbox(
+    "⚖️ Alinhar por Centro de Gravidade", 
+    value=False, 
+    help="Ative para objetos assimétricos ou inclinados. O sistema calcula o peso visual para a imagem não parecer 'pendendo' para um lado."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.header("📐 Ajuste de Posição e Tamanho")
@@ -119,12 +120,18 @@ arquivo_enviado = st.file_uploader("Selecione ou arraste a foto do produto aqui:
 if arquivo_enviado is not None:
     bytes_arquivo = arquivo_enviado.getvalue()
     
-    with st.spinner("🤖 IA processando e isolando o produto principal..."):
+    with st.spinner("🤖 IA processando, isolando e centralizando o produto..."):
         img_sem_fundo = recortar_fundo(bytes_arquivo, modo_precisao, forca_sep)
         
-        caixa_delimitadora = img_sem_fundo.getbbox()
-        if caixa_delimitadora:
-            img_cortada = img_sem_fundo.crop(caixa_delimitadora)
+        # --- CORTE ÓPTICO ANTI-FANTASMA (Ignora sombras invisíveis que desalinham a foto) ---
+        img_arr = np.array(img_sem_fundo)
+        alpha_canal = img_arr[:, :, 3]
+        y_indices, x_indices = np.where(alpha_canal > 35) # Só corta o que tem opacidade real
+        
+        if len(x_indices) > 0 and len(y_indices) > 0:
+            x_min, x_max = x_indices.min(), x_indices.max()
+            y_min, y_max = y_indices.min(), y_indices.max()
+            img_cortada = img_sem_fundo.crop((x_min, y_min, x_max + 1, y_max + 1))
         else:
             img_cortada = img_sem_fundo
 
@@ -137,8 +144,23 @@ if arquivo_enviado is not None:
         
         img_redimensionada = img_cortada.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
         
-        posicao_x = ((largura_fundo - nova_largura) // 2) + ajuste_x
-        posicao_y = ((altura_fundo - nova_altura) // 2) + ajuste_y
+        # --- CÁLCULO DE CENTRALIZAÇÃO AUTOMÁTICA ---
+        if modo_centro_massa:
+            # Calcula o Centro de Massa (Gravidade) dos pixels visíveis
+            arr_redim = np.array(img_redimensionada)[:, :, 3]
+            momentos = cv2.moments(arr_redim)
+            if momentos["m00"] != 0:
+                centro_x = int(momentos["m10"] / momentos["m00"])
+                centro_y = int(momentos["m01"] / momentos["m00"])
+                posicao_x = (largura_fundo // 2) - centro_x + ajuste_x
+                posicao_y = (altura_fundo // 2) - centro_y + ajuste_y
+            else:
+                posicao_x = ((largura_fundo - nova_largura) // 2) + ajuste_x
+                posicao_y = ((altura_fundo - nova_altura) // 2) + ajuste_y
+        else:
+            # Centralização Geométrica Limpa (Padrão de Estúdio)
+            posicao_x = ((largura_fundo - nova_largura) // 2) + ajuste_x
+            posicao_y = ((altura_fundo - nova_altura) // 2) + ajuste_y
         
         imagem_final = fundo_padrao.copy()
         imagem_final.paste(img_redimensionada, (posicao_x, posicao_y), img_redimensionada)
@@ -147,13 +169,13 @@ if arquivo_enviado is not None:
         imagem_final.save(buf, format="PNG")
         byte_im = buf.getvalue()
 
-    st.success("✅ Imagem processada com sucesso!")
+    st.success("✅ Imagem processada e centralizada com sucesso!")
     
     col1, col2 = st.columns(2)
     with col1:
         st.image(arquivo_enviado, caption="Foto Original", use_container_width=True)
     with col2:
-        st.image(imagem_final, caption="Resultado Final Dm3", use_container_width=True)
+        st.image(imagem_final, caption="Resultado Final Dm3 (Centralização Automática)", use_container_width=True)
         
     st.download_button(
         label="⬇️ Baixar Imagem Pronta",
