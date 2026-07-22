@@ -18,21 +18,17 @@ except FileNotFoundError:
     st.error("⚠️ Erro: O arquivo 'fundo_dm3.png' não foi encontrado na pasta do sistema!")
     st.stop()
 
-# 2. Carregar Inteligência Artificial (Priorizando o melhor modelo de contorno)
+# 2. Carregar IA (100% Seguro para Nuvem Gratuita - Limite de 1GB RAM)
 @st.cache_resource
 def carregar_modelo_ia():
     try:
-        # Tenta o modelo BiRefNet completo (o mais preciso do mundo para bordas perfeitas)
-        return new_session("birefnet-general")
+        # Modelo principal: Excelente para objetos em estoques/galpões e leve na memória
+        return new_session("isnet-general-use")
     except Exception:
-        try:
-            # Segunda opção: excelente para fundos de galpão/estoque
-            return new_session("isnet-general-use")
-        except Exception:
-            # Último recurso: modelo leve para economizar memória
-            return new_session("u2netp")
+        # Modelo de emergência: Ultra-leve (apenas 40 MB de RAM) para nunca travar
+        return new_session("u2netp")
 
-# 3. FUNÇÃO DE LIMPEZA SUAVE: Isola o produto principal sem mastigar as bordas
+# 3. FUNÇÃO DE LIMPEZA SUAVE: Isola o produto sem mastigar a borracha
 def limpar_bordas_e_isolamento(img_rgba, forca_corte):
     img_array = np.array(img_rgba)
     canal_alpha = img_array[:, :, 3]
@@ -40,33 +36,31 @@ def limpar_bordas_e_isolamento(img_rgba, forca_corte):
     # Cria máscara preta e branca pura
     _, binaria = cv2.threshold(canal_alpha, 10, 255, cv2.THRESH_BINARY)
     
-    # 1. Apenas se o usuário pedir força no slider, aplica um fechamento mínimo e localizado
-    # para quebrar arames de clipes sem comer a borracha do produto
+    # 1. Aplica fechamento morfológico leve APENAS se o usuário pedir força no slider
     if forca_corte > 0:
         k_size = int(forca_corte)
         if k_size % 2 == 0:
             k_size += 1
         tamanho_corte = np.ones((k_size, k_size), np.uint8)
-        # O MORPH_OPEN aqui é suave apenas para soltar conexões finas
         binaria = cv2.morphologyEx(binaria, cv2.MORPH_OPEN, tamanho_corte)
     
-    # 2. Encontra os contornos de tudo o que está na tela
+    # 2. Encontra os contornos na tela para isolar o objeto principal
     contornos, _ = cv2.findContours(binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if not contornos:
         return img_rgba
         
-    # Identifica qual é o maior contorno (o produto real)
+    # Identifica o contorno de maior área (a mercadoria real)
     maior_contorno = max(contornos, key=cv2.contourArea)
     
-    # Cria uma máscara totalmente preta e desenha APENAS o produto principal em branco sólido
+    # Desenha uma máscara sólida contendo apenas o produto principal
     mascara_limpa = np.zeros_like(binaria)
     cv2.drawContours(mascara_limpa, [maior_contorno], -1, 255, thickness=cv2.FILLED)
     
-    # 3. TRUQUE DE MESTRE (Anti-serrilhado): Suaviza a borda cortada em alta definição
+    # 3. Anti-serrilhado: Suaviza a borda final para não parecer recorte mal feito
     mascara_suavizada = cv2.GaussianBlur(mascara_limpa, (5, 5), 0)
     
-    # Aplica a máscara limpa de volta na foto original, preservando a transparência perfeita
+    # Aplica a máscara limpa na imagem original
     img_array[:, :, 3] = cv2.bitwise_and(canal_alpha, canal_alpha, mask=mascara_suavizada)
     
     return Image.fromarray(img_array)
@@ -88,20 +82,19 @@ def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao):
     else:
         recorte_bruto = remove(img, session=sessao_ia)
         
-    # Passa pelo novo limpador de contornos suaves
+    # Limpa contornos e elimina clipes/sujeiras isoladas
     recorte_limpo = limpar_bordas_e_isolamento(recorte_bruto, forca_desconexao)
     return recorte_limpo
 
 # --- BARRA LATERAL DE CONTROLES ---
 st.sidebar.header("🛠️ Ajustes de Limpeza")
-# Reduzimos o valor padrão para 0, deixando a IA trabalhar pura primeiro!
 forca_sep = st.sidebar.slider(
     "✂️ Força para Desgrudar Itens Finos", 
     min_value=0, 
     max_value=30, 
     value=0, 
     step=3, 
-    help="Deixe em 0 para a melhor qualidade de borda. Aumente apenas se clipes ou arames teimosos não sumirem sozinhos."
+    help="Deixe em 0 para a borda ficar perfeitamente lisa. Aumente apenas se clipes ou arames teimosos não sumirem sozinhos."
 )
 modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=True)
 
@@ -120,7 +113,6 @@ if arquivo_enviado is not None:
     with st.spinner("🤖 IA processando contornos de alta precisão..."):
         img_sem_fundo = recortar_fundo(bytes_arquivo, modo_precisao, forca_sep)
         
-        # Auto-crop ao redor do material
         caixa_delimitadora = img_sem_fundo.getbbox()
         if caixa_delimitadora:
             img_cortada = img_sem_fundo.crop(caixa_delimitadora)
