@@ -15,7 +15,7 @@ import numpy as np
 st.set_page_config(page_title="Gerador Dm3 - Pro", page_icon="📦", layout="wide")
 
 st.title("📦 Dm3 - Estúdio de Fotos Automático (Foco em Produtos)")
-st.write("Suba a foto do material. O sistema remove o fundo e elimina sombras e itens encostados sem travar.")
+st.write("Suba a foto do material. O sistema isola o produto e remove itens encostados sem estragar as bordas.")
 
 # 1. Carregar o fundo padrão (Gabarito)
 try:
@@ -24,7 +24,7 @@ except FileNotFoundError:
     st.error("⚠️ Erro: O arquivo 'fundo_dm3.png' não foi encontrado na pasta do sistema!")
     st.stop()
 
-# 2. Carregar Inteligência Artificial (Modelo leve e estável)
+# 2. Carregar Inteligência Artificial (Estável para nuvem)
 @st.cache_resource
 def carregar_modelo_ia():
     try:
@@ -32,62 +32,78 @@ def carregar_modelo_ia():
     except Exception:
         return new_session("u2netp")
 
-# 3. FUNÇÃO INTELIGENTE: Limpa sombras fantasmas e apaga itens claros (clipes/papéis) encostados
-def limpar_sombras_e_itens(img_rgba, forca_limpeza):
+# 3. FUNÇÃO INTELIGENTE: Remove itens encostados usando Núcleo Seguro (não estraga partes metálicas)
+def limpar_itens_encostados(img_rgba, forca_corte):
     img_array = np.array(img_rgba)
-    r, g, b, alpha = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2], img_array[:, :, 3]
+    canal_alpha = img_array[:, :, 3]
     
-    # 1. CORTE DE SOMBRAS (Anti-Fantasma):
-    # Elimina transparências fracas (como a sombra branca do post-it), deixando a borda 100% nítida e sólida
-    _, alpha_limpo = cv2.threshold(alpha, 200, 255, cv2.THRESH_BINARY)
+    # Cria uma máscara binária pura (0 para fundo, 255 para o que a IA recortou)
+    _, binaria = cv2.threshold(canal_alpha, 20, 255, cv2.THRESH_BINARY)
     
-    # 2. LIMPEZA DE ITENS ENCOSTADOS (Ativada pelo Slider):
-    # Se o slider for maior que 0, ele identifica objetos claros/metálicos (clipes) grudados no produto e os apaga
-    if forca_limpeza > 0:
-        # Transforma para escala de cinza para medir o brilho dos objetos
-        cinza = cv2.cvtColor(img_array[:, :, :3], cv2.COLOR_RGB2GRAY)
+    # Se o usuário acionou o slider de força
+    if forca_corte > 0:
+        k_size = int(forca_corte)
+        if k_size % 2 == 0:
+            k_size += 1
+        elemento_estrutura = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
         
-        # Cria uma máscara apagando tudo o que for mais claro que o nível escolhido no slider
-        limite_brilho = 255 - int(forca_limpeza * 2)
-        _, mascara_sem_clipes = cv2.threshold(cinza, limite_brilho, 255, cv2.THRESH_BINARY_INV)
+        # PASSO 1: Erosão temporária APENAS para quebrar pontes finas (arame do clipe e ponta do post-it)
+        mascara_erodida = cv2.erode(binaria, elemento_estrutura, iterations=1)
         
-        # Combina a limpeza de borda com a remoção de clipes
-        alpha_limpo = cv2.bitwise_and(alpha_limpo, mascara_sem_clipes)
-        
-        # Pega apenas o maior objeto restante (o produto real), jogando fora pedaços soltos
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(alpha_limpo, connectivity=8)
+        # PASSO 2: Achar os blocos separados e manter APENAS o corpo principal do produto
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mascara_erodida, connectivity=8)
         if num_labels > 1:
             maior_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-            alpha_limpo = np.where(labels == maior_label, 255, 0).astype(np.uint8)
+            nucleo_produto = np.where(labels == maior_label, 255, 0).astype(np.uint8)
+        else:
+            nucleo_produto = mascara_erodida
             
-    # Suavização mínima de meio pixel apenas para a borda não ficar pontiaguda
-    alpha_final = cv2.GaussianBlur(alpha_limpo, (3, 3), 0)
-    img_array[:, :, 3] = alpha_final
+        # PASSO 3 (O Segredo): Dilatar o núcleo de volta exatamente na mesma proporção!
+        # Isso devolve a borda original e lisa do grampeador, sem deixar o corte mastigado
+        mascara_restaurada = cv2.dilate(nucleo_produto, elemento_estrutura, iterations=1)
+        
+        # PASSO 4: Cruza a máscara restaurada com o alpha original da IA
+        # Tudo o que era clipe ou post-it fica de fora, mas o grampeador mantém 100% da sua borda natural
+        alpha_final = cv2.bitwise_and(canal_alpha, mascara_restaurada)
+    else:
+        alpha_final = canal_alpha
+        
+    # Suavização leve de acabamento anti-serrilhado
+    alpha_suave = cv2.GaussianBlur(alpha_final, (3, 3), 0)
+    img_array[:, :, 3] = alpha_suave
     
     return Image.fromarray(img_array)
 
 # 4. Função de Recorte Combinada
 @st.cache_data(show_spinner=False)
-def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_limpeza):
+def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao):
     img = Image.open(io.BytesIO(imagem_bytes)).convert("RGBA")
     sessao_ia = carregar_modelo_ia()
     
-    # Rodamos a IA limpa
-    recorte_bruto = remove(img, session=sessao_ia)
+    if usar_alta_precisao:
+        recorte_bruto = remove(
+            img, 
+            session=sessao_ia, 
+            alpha_matting=True, 
+            alpha_matting_foreground_threshold=240, 
+            alpha_matting_background_threshold=10
+        )
+    else:
+        recorte_bruto = remove(img, session=sessao_ia)
         
-    # Passamos no nosso filtro leve de remoção de sombras e clipes
-    recorte_limpo = limpar_sombras_e_itens(recorte_bruto, forca_limpeza)
+    # Aplica a remoção por Núcleo Seguro
+    recorte_limpo = limpar_itens_encostados(recorte_bruto, forca_desconexao)
     return recorte_limpo
 
 # --- BARRA LATERAL DE CONTROLES ---
 st.sidebar.header("🛠️ Ajustes de Limpeza")
 forca_sep = st.sidebar.slider(
-    "✂️ Força para Apagar Clipes/Papéis", 
+    "✂️ Força para Desgrudar Clipes e Papéis", 
     min_value=0, 
-    max_value=50, 
+    max_value=40, 
     value=0, 
-    step=5, 
-    help="Deixe em 0 para limpar apenas sombras. Aumente se quiser apagar clipes metálicos ou papéis claros encostados no produto."
+    step=2, 
+    help="Deixe em 0 se a foto não tiver nada encostado. Se houver clipes ou papéis colados no produto, aumente gradualmente (ex: 10, 14 ou 18) até eles sumirem."
 )
 modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
 
@@ -103,7 +119,7 @@ arquivo_enviado = st.file_uploader("Selecione ou arraste a foto do produto aqui:
 if arquivo_enviado is not None:
     bytes_arquivo = arquivo_enviado.getvalue()
     
-    with st.spinner("🤖 IA processando e eliminando sombras fantasmas..."):
+    with st.spinner("🤖 IA processando e isolando o produto principal..."):
         img_sem_fundo = recortar_fundo(bytes_arquivo, modo_precisao, forca_sep)
         
         caixa_delimitadora = img_sem_fundo.getbbox()
@@ -131,13 +147,13 @@ if arquivo_enviado is not None:
         imagem_final.save(buf, format="PNG")
         byte_im = buf.getvalue()
 
-    st.success("✅ Imagem processada com bordas nítidas e sem sombras!")
+    st.success("✅ Imagem processada com sucesso!")
     
     col1, col2 = st.columns(2)
     with col1:
         st.image(arquivo_enviado, caption="Foto Original", use_container_width=True)
     with col2:
-        st.image(imagem_final, caption="Resultado Final Dm3 (Sem Sombras Fantasmas)", use_container_width=True)
+        st.image(imagem_final, caption="Resultado Final Dm3", use_container_width=True)
         
     st.download_button(
         label="⬇️ Baixar Imagem Pronta",
