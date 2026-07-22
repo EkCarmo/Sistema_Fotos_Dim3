@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="Gerador Dm3 - Pro", page_icon="📦", layout="wide")
 
 st.title("📦 Dm3 - Estúdio de Fotos Automático (Foco em Produtos)")
-st.write("Suba a foto do material. O sistema remove o fundo e elimina itens encostados ou soltos na cena.")
+st.write("Suba a foto do material. O sistema remove o fundo mantendo bordas limpas e nítidas.")
 
 # 1. Carregar o fundo padrão (Gabarito)
 try:
@@ -18,75 +18,92 @@ except FileNotFoundError:
     st.error("⚠️ Erro: O arquivo 'fundo_dm3.png' não foi encontrado na pasta do sistema!")
     st.stop()
 
-# 2. Carregar Inteligência Artificial (Modelo Avançado)
+# 2. Carregar Inteligência Artificial (Priorizando o melhor modelo de contorno)
 @st.cache_resource
 def carregar_modelo_ia():
     try:
-        # Tenta o modelo especialista em produtos
-        return new_session("isnet-general-use")
+        # Tenta o modelo BiRefNet completo (o mais preciso do mundo para bordas perfeitas)
+        return new_session("birefnet-general")
     except Exception:
-        # Se a nuvem não aguentar a memória, usa o modelo ultra leve
-        return new_session("u2netp")
+        try:
+            # Segunda opção: excelente para fundos de galpão/estoque
+            return new_session("isnet-general-use")
+        except Exception:
+            # Último recurso: modelo leve para economizar memória
+            return new_session("u2netp")
 
-# 3. FUNÇÃO MATEMÁTICA: Arrebenta conexões com força dinâmica programável
-def limpar_sujeiras_e_itens_encostados(img_rgba, forca_corte):
-    # Se a força for 0, não aplica o filtro
-    if forca_corte <= 0:
-        return img_rgba
-        
+# 3. FUNÇÃO DE LIMPEZA SUAVE: Isola o produto principal sem mastigar as bordas
+def limpar_bordas_e_isolamento(img_rgba, forca_corte):
     img_array = np.array(img_rgba)
     canal_alpha = img_array[:, :, 3]
     
     # Cria máscara preta e branca pura
     _, binaria = cv2.threshold(canal_alpha, 10, 255, cv2.THRESH_BINARY)
     
-    # Garante que o tamanho da "tesoura" matemática seja um número ímpar
-    k_size = int(forca_corte)
-    if k_size % 2 == 0:
-        k_size += 1
-    tamanho_corte = np.ones((k_size, k_size), np.uint8)
+    # 1. Apenas se o usuário pedir força no slider, aplica um fechamento mínimo e localizado
+    # para quebrar arames de clipes sem comer a borracha do produto
+    if forca_corte > 0:
+        k_size = int(forca_corte)
+        if k_size % 2 == 0:
+            k_size += 1
+        tamanho_corte = np.ones((k_size, k_size), np.uint8)
+        # O MORPH_OPEN aqui é suave apenas para soltar conexões finas
+        binaria = cv2.morphologyEx(binaria, cv2.MORPH_OPEN, tamanho_corte)
     
-    # PASSO A: Abertura Morfológica (Erosão seguida de Dilatação)
-    # Isso destrói arames de clipes, post-its e pontes finas sem encolher o produto principal
-    mask_aberta = cv2.morphologyEx(binaria, cv2.MORPH_OPEN, tamanho_corte)
+    # 2. Encontra os contornos de tudo o que está na tela
+    contornos, _ = cv2.findContours(binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # PASSO B: Encontrar todos os pedaços separados na tela
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_aberta, connectivity=8)
-    
-    if num_labels <= 1:
+    if not contornos:
         return img_rgba
         
-    # Identifica o ID da maior peça da tela (o nosso produto, ignorando o fundo)
-    maior_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-    mascara_final = np.where(labels == maior_label, 255, 0).astype(np.uint8)
+    # Identifica qual é o maior contorno (o produto real)
+    maior_contorno = max(contornos, key=cv2.contourArea)
     
-    # PASSO C: Suavização leve das bordas para o corte não ficar serrilhado
-    mascara_suave = cv2.GaussianBlur(mascara_final, (3, 3), 0)
+    # Cria uma máscara totalmente preta e desenha APENAS o produto principal em branco sólido
+    mascara_limpa = np.zeros_like(binaria)
+    cv2.drawContours(mascara_limpa, [maior_contorno], -1, 255, thickness=cv2.FILLED)
     
-    # Aplica a máscara limpa na foto original
-    img_array[:, :, 3] = cv2.bitwise_and(canal_alpha, canal_alpha, mask=mascara_final)
+    # 3. TRUQUE DE MESTRE (Anti-serrilhado): Suaviza a borda cortada em alta definição
+    mascara_suavizada = cv2.GaussianBlur(mascara_limpa, (5, 5), 0)
+    
+    # Aplica a máscara limpa de volta na foto original, preservando a transparência perfeita
+    img_array[:, :, 3] = cv2.bitwise_and(canal_alpha, canal_alpha, mask=mascara_suavizada)
     
     return Image.fromarray(img_array)
 
-# 4. Função de Recorte Combinada com Cache (IA + Filtro Dinâmico)
+# 4. Função de Recorte Combinada
 @st.cache_data(show_spinner=False)
 def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao):
     img = Image.open(io.BytesIO(imagem_bytes)).convert("RGBA")
     sessao_ia = carregar_modelo_ia()
     
     if usar_alta_precisao:
-        recorte_bruto = remove(img, session=sessao_ia, alpha_matting=True, alpha_matting_foreground_threshold=240, alpha_matting_background_threshold=10)
+        recorte_bruto = remove(
+            img, 
+            session=sessao_ia, 
+            alpha_matting=True, 
+            alpha_matting_foreground_threshold=240, 
+            alpha_matting_background_threshold=10
+        )
     else:
         recorte_bruto = remove(img, session=sessao_ia)
         
-    # Aplica a limpeza usando a força que você escolheu no Slider
-    recorte_limpo = limpar_sujeiras_e_itens_encostados(recorte_bruto, forca_desconexao)
+    # Passa pelo novo limpador de contornos suaves
+    recorte_limpo = limpar_bordas_e_isolamento(recorte_bruto, forca_desconexao)
     return recorte_limpo
 
 # --- BARRA LATERAL DE CONTROLES ---
 st.sidebar.header("🛠️ Ajustes de Limpeza")
-forca_sep = st.sidebar.slider("✂️ Força para Desgrudar Itens", min_value=0, max_value=60, value=15, step=5, help="Aumente esse valor se clipes, papéis ou sujeiras encostadas no produto não sumirem automaticamente.")
-modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
+# Reduzimos o valor padrão para 0, deixando a IA trabalhar pura primeiro!
+forca_sep = st.sidebar.slider(
+    "✂️ Força para Desgrudar Itens Finos", 
+    min_value=0, 
+    max_value=30, 
+    value=0, 
+    step=3, 
+    help="Deixe em 0 para a melhor qualidade de borda. Aumente apenas se clipes ou arames teimosos não sumirem sozinhos."
+)
+modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.header("📐 Ajuste de Posição e Tamanho")
@@ -100,8 +117,7 @@ arquivo_enviado = st.file_uploader("Selecione ou arraste a foto do produto aqui:
 if arquivo_enviado is not None:
     bytes_arquivo = arquivo_enviado.getvalue()
     
-    with st.spinner("🤖 IA processando e separando itens encostados..."):
-        # Executa o recorte passando o valor do slider
+    with st.spinner("🤖 IA processando contornos de alta precisão..."):
         img_sem_fundo = recortar_fundo(bytes_arquivo, modo_precisao, forca_sep)
         
         # Auto-crop ao redor do material
@@ -130,13 +146,13 @@ if arquivo_enviado is not None:
         imagem_final.save(buf, format="PNG")
         byte_im = buf.getvalue()
 
-    st.success("✅ Imagem processada! Use o slider 'Força para Desgrudar Itens' à esquerda se algum item teimoso ainda aparecer.")
+    st.success("✅ Imagem processada com contornos limpos!")
     
     col1, col2 = st.columns(2)
     with col1:
         st.image(arquivo_enviado, caption="Foto Original", use_container_width=True)
     with col2:
-        st.image(imagem_final, caption="Resultado Final Dm3 (Atualiza em tempo real!)", use_container_width=True)
+        st.image(imagem_final, caption="Resultado Final Dm3 (Alta Nitidez)", use_container_width=True)
         
     st.download_button(
         label="⬇️ Baixar Imagem Pronta",
