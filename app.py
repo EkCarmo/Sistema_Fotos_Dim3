@@ -10,6 +10,7 @@ from PIL import Image
 import io
 import cv2
 import numpy as np
+import gc  # Faxineiro de memória RAM do Python
 
 # Configuração da página Web
 st.set_page_config(page_title="Gerador Dm3 - Pro", page_icon="📦", layout="wide")
@@ -68,8 +69,8 @@ def limpar_itens_encostados(img_rgba, forca_corte):
     
     return Image.fromarray(img_array)
 
-# 4. Função de Recorte Combinada
-@st.cache_data(show_spinner=False)
+# 4. Função de Recorte com TRAVA DE MEMÓRIA (max_entries=2 impede o servidor de cair!)
+@st.cache_data(max_entries=2, show_spinner=False)
 def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao):
     img = Image.open(io.BytesIO(imagem_bytes)).convert("RGBA")
     sessao_ia = carregar_modelo_ia()
@@ -89,6 +90,13 @@ def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao):
     return recorte_limpo
 
 # --- BARRA LATERAL DE CONTROLES ---
+st.sidebar.header("🚀 Desempenho e RAM")
+if st.sidebar.button("🧹 Limpar Memória RAM", use_container_width=True, help="Clique aqui se o sistema estiver rodando há muito tempo e parecer um pouco lento."):
+    st.cache_data.clear()
+    gc.collect()
+    st.sidebar.success("Memória do servidor limpa!")
+
+st.sidebar.markdown("---")
 st.sidebar.header("🛠️ Ajustes de Limpeza")
 forca_sep = st.sidebar.slider(
     "✂️ Força para Desgrudar Clipes e Papéis", 
@@ -168,8 +176,11 @@ if arquivo_enviado is not None:
         buf = io.BytesIO()
         imagem_final.save(buf, format="PNG")
         byte_im = buf.getvalue()
+        
+        # Faxineiro da RAM trabalhando após gerar a foto
+        gc.collect()
 
-    st.success("✅ Imagem processada e centralizada com sucesso!")
+    st.success("✅ Imagem processada com sucesso e memória RAM liberada!")
     
     col1, col2 = st.columns(2)
     with col1:
