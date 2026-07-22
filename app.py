@@ -1,3 +1,10 @@
+import os
+# --- TRAVAS ANTI-CONGELAMENTO PARA NUVEM GRATUITA ---
+# Deve vir ANTES de importar o rembg/cv2 para evitar que a CPU virtual engasgue
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import streamlit as st
 from rembg import remove, new_session
 from PIL import Image
@@ -18,15 +25,11 @@ except FileNotFoundError:
     st.error("⚠️ Erro: O arquivo 'fundo_dm3.png' não foi encontrado na pasta do sistema!")
     st.stop()
 
-# 2. Carregar IA (100% Seguro para Nuvem Gratuita - Limite de 1GB RAM)
+# 2. Carregar IA (DIRETO NO MODELO LEVE - 40 MB - Impossível travar por memória!)
 @st.cache_resource
 def carregar_modelo_ia():
-    try:
-        # Modelo principal: Excelente para objetos em estoques/galpões e leve na memória
-        return new_session("isnet-general-use")
-    except Exception:
-        # Modelo de emergência: Ultra-leve (apenas 40 MB de RAM) para nunca travar
-        return new_session("u2netp")
+    # O modelo 'u2netp' é o mais leve e rápido da categoria, perfeito para nuvem gratuita
+    return new_session("u2netp")
 
 # 3. FUNÇÃO DE LIMPEZA SUAVE: Isola o produto sem mastigar a borracha
 def limpar_bordas_e_isolamento(img_rgba, forca_corte):
