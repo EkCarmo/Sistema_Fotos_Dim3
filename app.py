@@ -22,9 +22,11 @@ except FileNotFoundError:
 @st.cache_resource
 def carregar_modelo_ia():
     try:
-        return new_session("birefnet-general-lite")
-    except Exception:
+        # Tenta o modelo especialista em produtos
         return new_session("isnet-general-use")
+    except Exception:
+        # Se a nuvem não aguentar a memória, usa o modelo ultra leve
+        return new_session("u2netp")
 
 # 3. FUNÇÃO MATEMÁTICA: Arrebenta conexões com força dinâmica programável
 def limpar_sujeiras_e_itens_encostados(img_rgba, forca_corte):
