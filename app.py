@@ -25,8 +25,8 @@ except FileNotFoundError:
     st.error("⚠️ Erro: O arquivo 'fundo_dm3.png' não foi encontrado na pasta do sistema!")
     st.stop()
 
-# 2. Carregar Inteligência Artificial (Dinâmico: Geral ou Especialista em Roupas)
-@st.cache_resource
+# 2. Carregar Inteligência Artificial COM TRAVA DE MEMÓRIA (max_entries=1 impede ter 2 IAs na RAM ao mesmo tempo!)
+@st.cache_resource(max_entries=1)
 def carregar_modelo_ia(modo_roupa=False):
     try:
         if modo_roupa:
@@ -98,6 +98,7 @@ def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao, modo_roup
 st.sidebar.header("🚀 Desempenho e RAM")
 if st.sidebar.button("🧹 Limpar Memória RAM", use_container_width=True, help="Clique aqui se o sistema estiver rodando há muito tempo e parecer um pouco lento."):
     st.cache_data.clear()
+    st.cache_resource.clear()
     gc.collect()
     st.sidebar.success("Memória do servidor limpa!")
 
@@ -168,7 +169,6 @@ if arquivo_enviado is not None:
         
         # --- CÁLCULO DE CENTRALIZAÇÃO AUTOMÁTICA ---
         if modo_centro_massa:
-            # Calcula o Centro de Massa (Gravidade) dos pixels visíveis
             arr_redim = np.array(img_redimensionada)[:, :, 3]
             momentos = cv2.moments(arr_redim)
             if momentos["m00"] != 0:
@@ -180,7 +180,6 @@ if arquivo_enviado is not None:
                 posicao_x = ((largura_fundo - nova_largura) // 2) + ajuste_x
                 posicao_y = ((altura_fundo - nova_altura) // 2) + ajuste_y
         else:
-            # Centralização Geométrica Limpa (Padrão de Estúdio)
             posicao_x = ((largura_fundo - nova_largura) // 2) + ajuste_x
             posicao_y = ((altura_fundo - nova_altura) // 2) + ajuste_y
         
