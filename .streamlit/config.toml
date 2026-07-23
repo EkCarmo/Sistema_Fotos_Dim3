@@ -1,0 +1,12 @@
+[server]
+# Limita o upload a 15MB. Fotos de celular em alta resolução podem passar de
+# 20-30MB e, mesmo com o redimensionamento automático no app.py, o arquivo
+# inteiro ainda precisa ser recebido e carregado na memória antes de ser
+# reduzido. Limitar aqui evita que uploads muito grandes sozinhos já
+# consumam boa parte da RAM disponível no plano gratuito.
+maxUploadSize = 15
+
+[runner]
+# Evita que o Streamlit rode o script duas vezes em determinados cenários
+# de "fast rerun", o que dobraria o uso de memória temporariamente.
+fastReruns = false
