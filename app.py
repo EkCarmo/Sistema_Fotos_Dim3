@@ -27,8 +27,58 @@ LADO_MINIMO_PROCESSAMENTO = 1100   # piso de resolução p/ a IA não perder det
 
 # Config da página
 st.set_page_config(page_title="Gerador Dm3 - Pro", page_icon="📦", layout="wide")
-st.title("📦 Dm3 - Estúdio de Fotos Automático (Foco em Produtos)")
-st.write("Suba a foto do material. O sistema isola, limpa itens encostados e centraliza automaticamente a mercadoria.")
+
+# =========================================================
+# IDENTIDADE VISUAL DM3
+# CSS mínimo e aditivo — não sobrescreve componentes internos do
+# Streamlit (frágil entre versões), só estiliza os blocos que criamos.
+# =========================================================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500&display=swap');
+
+.dm3-header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 22px; margin-bottom: 18px;
+    background: linear-gradient(135deg, #1B1E27 0%, #12141A 100%);
+    border: 1px solid #2A2E3A; border-radius: 14px;
+}
+.dm3-mark {
+    width: 42px; height: 42px; border-radius: 10px; flex-shrink: 0;
+    background: #FF7A1A; color: #12141A;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 19px;
+}
+.dm3-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 23px; color: #F2F1ED; }
+.dm3-subtitle { color: #9AA0AC; font-size: 13.5px; margin-top: 2px; }
+
+.dm3-sidebar-label {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 1.5px;
+    color: #FF7A1A; margin: 4px 0 10px 0; text-transform: uppercase;
+}
+
+.dm3-dim-tag {
+    position: relative; display: inline-block; margin-top: 10px;
+    padding: 8px 22px; font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; color: #FF9A47; letter-spacing: 0.5px;
+}
+.dm3-dim-tag .tick {
+    position: absolute; width: 12px; height: 12px; border-color: #FF7A1A;
+}
+.dm3-dim-tag .tl { top: 0; left: 0; border-top: 2px solid; border-left: 2px solid; }
+.dm3-dim-tag .tr { top: 0; right: 0; border-top: 2px solid; border-right: 2px solid; }
+.dm3-dim-tag .bl { bottom: 0; left: 0; border-bottom: 2px solid; border-left: 2px solid; }
+.dm3-dim-tag .br { bottom: 0; right: 0; border-bottom: 2px solid; border-right: 2px solid; }
+</style>
+
+<div class="dm3-header">
+    <div class="dm3-mark">D3</div>
+    <div>
+        <div class="dm3-title">Estúdio de Fotos Dm3</div>
+        <div class="dm3-subtitle">Isola, limpa itens encostados e centraliza a mercadoria automaticamente</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # 1. Carregar o fundo padrão (Gabarito)
 try:
@@ -217,59 +267,53 @@ def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao, modo_roup
 
 
 # --- BARRA LATERAL DE CONTROLES ---
-st.sidebar.header("🚀 Desempenho e RAM")
+st.sidebar.markdown('<div class="dm3-sidebar-label">PAINEL DE CONTROLE</div>', unsafe_allow_html=True)
 
-if st.sidebar.button("🧹 Limpar Memória RAM", use_container_width=True,
-                      help="Clique aqui se o sistema estiver rodando há muito tempo e parecer um pouco lento."):
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    gc.collect()
-    st.sidebar.success("Memória do servidor limpa!")
+with st.sidebar.expander("👕 Tipo de Produto", expanded=True):
+    modo_roupa = st.checkbox(
+        "Modo Roupa / Extrair do Manequim",
+        value=False,
+        help="Marque ESTA CAIXA ao fotografar roupas em manequins, cabides ou modelos. O sistema usará uma IA especialista em tecidos para apagar pescoços, braços e suportes!"
+    )
 
-st.sidebar.caption(
-    f"📏 Fotos maiores que {LIMITE_LADO_PROCESSAMENTO}px de lado são "
-    "reduzidas automaticamente antes do processamento para economizar RAM, "
-    "sem perda perceptível de qualidade no resultado final."
-)
+with st.sidebar.expander("🛠️ Limpeza & Precisão", expanded=False):
+    forca_sep = st.slider(
+        "✂️ Força para Desgrudar Clipes e Papéis",
+        min_value=0, max_value=40, value=0, step=2,
+        help="O sistema já remove fundos 'fantasmas' automaticamente. Use este slider só quando algo ainda estiver ENCOSTADO no produto (clipe, papel) e for confundido como parte dele — aumente gradualmente até eles sumirem."
+    )
+    modo_precisao = st.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
+    usar_grabcut = st.checkbox(
+        "🔬 Refinamento Extra de Fundo (recomendado p/ cenários bagunçados)",
+        value=True,
+        help="Usa uma técnica clássica (não é IA, quase não pesa na RAM) para limpar pedaços de fundo que a IA deixou parcialmente visíveis. Deixe ligado; só desative se a foto for simples e o processamento estiver lento."
+    )
 
-st.sidebar.markdown("---")
-st.sidebar.header("👕 Tipo de Produto")
-modo_roupa = st.sidebar.checkbox(
-    "Modo Roupa / Extrair do Manequim",
-    value=False,
-    help="Marque ESTA CAIXA ao fotografar roupas em manequins, cabides ou modelos. O sistema usará uma IA especialista em tecidos para apagar pescoços, braços e suportes!"
-)
+with st.sidebar.expander("🎯 Posição & Tamanho", expanded=False):
+    modo_centro_massa = st.checkbox(
+        "⚖️ Alinhar por Centro de Gravidade",
+        value=False,
+        help="Ative para objetos assimétricos ou inclinados. O sistema calcula o peso visual para a imagem não parecer 'pendendo' para um lado."
+    )
+    escala_manual = st.slider("Tamanho do Produto (%)", min_value=30, max_value=100, value=80, step=5)
+    ajuste_x = st.slider("Mover para Horizontal (↔)", min_value=-200, max_value=200, value=0, step=10)
+    ajuste_y = st.slider("Mover para Vertical (↕)", min_value=-200, max_value=200, value=0, step=10)
 
-st.sidebar.markdown("---")
-st.sidebar.header("🛠️ Ajustes de Limpeza")
-forca_sep = st.sidebar.slider(
-    "✂️ Força para Desgrudar Clipes e Papéis",
-    min_value=0, max_value=40, value=0, step=2,
-    help="O sistema já remove fundos 'fantasmas' automaticamente. Use este slider só quando algo ainda estiver ENCOSTADO no produto (clipe, papel) e for confundido como parte dele — aumente gradualmente até eles sumirem."
-)
-modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
-usar_grabcut = st.sidebar.checkbox(
-    "🔬 Refinamento Extra de Fundo (recomendado p/ cenários bagunçados)",
-    value=True,
-    help="Usa uma técnica clássica (não é IA, quase não pesa na RAM) para limpar pedaços de fundo que a IA deixou parcialmente visíveis. Deixe ligado; só desative se a foto for simples e o processamento estiver lento."
-)
+with st.sidebar.expander("🚀 Sistema & Desempenho", expanded=False):
+    if st.button("🧹 Limpar Memória RAM", use_container_width=True,
+                  help="Clique aqui se o sistema estiver rodando há muito tempo e parecer um pouco lento."):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        gc.collect()
+        st.success("Memória do servidor limpa!")
 
-st.sidebar.markdown("---")
-st.sidebar.header("🎯 Modo de Centralização")
-modo_centro_massa = st.sidebar.checkbox(
-    "⚖️ Alinhar por Centro de Gravidade",
-    value=False,
-    help="Ative para objetos assimétricos ou inclinados. O sistema calcula o peso visual para a imagem não parecer 'pendendo' para um lado."
-)
-
-st.sidebar.markdown("---")
-st.sidebar.header("📐 Ajuste de Posição e Tamanho")
-escala_manual = st.sidebar.slider("Tamanho do Produto (%)", min_value=30, max_value=100, value=80, step=5)
-ajuste_x = st.sidebar.slider("Mover para Horizontal (↔)", min_value=-200, max_value=200, value=0, step=10)
-ajuste_y = st.sidebar.slider("Mover para Vertical (↕)", min_value=-200, max_value=200, value=0, step=10)
+    st.caption(
+        f"📏 Fotos maiores que {LIMITE_LADO_PROCESSAMENTO}px de lado são "
+        "reduzidas automaticamente antes do processamento para economizar RAM."
+    )
 
 # --- ÁREA PRINCIPAL ---
-arquivo_enviado = st.file_uploader("Selecione ou arraste a foto do produto aqui:", type=["png", "jpg", "jpeg"])
+arquivo_enviado = st.file_uploader("📤 Selecione ou arraste a foto do produto aqui", type=["png", "jpg", "jpeg"])
 
 if arquivo_enviado is not None:
     bytes_arquivo = arquivo_enviado.getvalue()
@@ -333,9 +377,18 @@ if arquivo_enviado is not None:
 
         col1, col2 = st.columns(2)
         with col1:
-            st.image(arquivo_enviado, caption="Foto Original", use_container_width=True)
+            with st.container(border=True):
+                st.image(arquivo_enviado, caption="Foto Original", use_container_width=True)
         with col2:
-            st.image(imagem_final, caption="Resultado Final Dm3 (Centralização Automática)", use_container_width=True)
+            with st.container(border=True):
+                st.image(imagem_final, caption="Resultado Final Dm3", use_container_width=True)
+                st.markdown(f"""
+                <div class="dm3-dim-tag">
+                    <span class="tick tl"></span><span class="tick tr"></span>
+                    <span class="tick bl"></span><span class="tick br"></span>
+                    {largura_fundo} × {altura_fundo} px
+                </div>
+                """, unsafe_allow_html=True)
 
         st.download_button(
             label="⬇️ Baixar Imagem Pronta",
