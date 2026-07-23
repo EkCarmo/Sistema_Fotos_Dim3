@@ -80,12 +80,13 @@ def redimensionar_para_processamento(imagem_bytes, limite_lado):
     return img
 
 
-# 3. FUNÇÃO INTELIGENTE: Remove itens encostados usando Núcleo Seguro
+# 3. FUNÇÃO INTELIGENTE: Remove itens encostados e "fantasmas" de fundo
 def limpar_itens_encostados(img_rgba, forca_corte):
     img_array = np.array(img_rgba)
     canal_alpha = img_array[:, :, 3]
 
-    # Cria uma máscara binária pura
+    # Cria uma máscara binária pura (também elimina ruído de fundo com
+    # transparência residual, tipo sombras/reflexos que a IA não zerou)
     _, binaria = cv2.threshold(canal_alpha, LIMIAR_ALPHA_MASCARA, 255, cv2.THRESH_BINARY)
 
     if forca_corte > 0:
@@ -93,33 +94,40 @@ def limpar_itens_encostados(img_rgba, forca_corte):
         if k_size % 2 == 0:
             k_size += 1
         elemento_estrutura = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-
         # Erosão temporária para quebrar pontes finas (arames de clipes, post-its)
-        mascara_erodida = cv2.erode(binaria, elemento_estrutura, iterations=1)
+        mascara_trabalho = cv2.erode(binaria, elemento_estrutura, iterations=1)
+    else:
+        elemento_estrutura = None
+        mascara_trabalho = binaria
 
-        # Acha os blocos separados e mantém APENAS o corpo principal
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mascara_erodida, connectivity=8)
+    # SEMPRE mantém apenas o maior bloco conectado da imagem — isto é o que
+    # elimina "fantasmas" de fundo (móveis, sombras, objetos ao fundo que a
+    # IA isolou como blocos separados do produto). Antes isso só rodava se
+    # o usuário mexesse no slider; agora roda por padrão em toda imagem.
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mascara_trabalho, connectivity=8)
 
-        if num_labels > 1:
-            maior_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-            nucleo_produto = np.where(labels == maior_label, 255, 0).astype(np.uint8)
-        else:
-            nucleo_produto = mascara_erodida
+    if num_labels > 1:
+        maior_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+        nucleo_produto = np.where(labels == maior_label, 255, 0).astype(np.uint8)
+    else:
+        nucleo_produto = mascara_trabalho
 
+    if elemento_estrutura is not None:
         # Dilata o núcleo de volta para devolver a borda original e lisa do produto
         mascara_restaurada = cv2.dilate(nucleo_produto, elemento_estrutura, iterations=1)
-        alpha_final = cv2.bitwise_and(canal_alpha, mascara_restaurada)
-
-        # Libera arrays intermediários explicitamente (ajuda em imagens grandes)
-        del mascara_erodida, nucleo_produto, mascara_restaurada, labels, stats
     else:
-        alpha_final = canal_alpha
+        mascara_restaurada = nucleo_produto
+
+    alpha_final = cv2.bitwise_and(canal_alpha, mascara_restaurada)
+
+    # Libera arrays intermediários explicitamente (ajuda em imagens grandes)
+    del mascara_trabalho, nucleo_produto, mascara_restaurada, labels, stats, binaria
 
     alpha_suave = cv2.GaussianBlur(alpha_final, (3, 3), 0)
     img_array[:, :, 3] = alpha_suave
 
     resultado = Image.fromarray(img_array)
-    del img_array, canal_alpha, binaria, alpha_final, alpha_suave
+    del img_array, canal_alpha, alpha_final, alpha_suave
     return resultado
 
 
@@ -176,7 +184,7 @@ st.sidebar.header("🛠️ Ajustes de Limpeza")
 forca_sep = st.sidebar.slider(
     "✂️ Força para Desgrudar Clipes e Papéis",
     min_value=0, max_value=40, value=0, step=2,
-    help="Deixe em 0 se a foto não tiver nada encostado. Se houver clipes ou papéis colados no produto, aumente gradualmente até eles sumirem."
+    help="O sistema já remove fundos 'fantasmas' automaticamente. Use este slider só quando algo ainda estiver ENCOSTADO no produto (clipe, papel) e for confundido como parte dele — aumente gradualmente até eles sumirem."
 )
 modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
 
