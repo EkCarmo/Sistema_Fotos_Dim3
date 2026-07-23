@@ -132,9 +132,50 @@ def limpar_itens_encostados(img_rgba, forca_corte):
 
 
 # 4. Função de Recorte com TRAVA DE MEMÓRIA
-# (max_entries=2 impede o servidor de cair; ttl expira resultados antigos)
+def refinar_com_grabcut(imagem_rgba, iteracoes=3):
+    """
+    Refina a máscara usando GrabCut (OpenCV) — corte de grafo clássico,
+    SEM nenhum modelo de IA adicional. Custo de RAM desprezível comparado
+    a trocar de modelo. Ajuda muito quando o fundo é bagunçado e a IA
+    deixa pedaços parcialmente transparentes "grudados" no produto.
+    """
+    img_rgb = np.array(imagem_rgba.convert("RGB"))
+    alpha = np.array(imagem_rgba)[:, :, 3]
+
+    # Mapa de certezas a partir da máscara que a IA já gerou:
+    # muito opaco = com certeza produto | muito transparente = com certeza fundo
+    # intermediário = incerto, o GrabCut decide olhando cor e textura reais
+    mascara_gc = np.full(alpha.shape, cv2.GC_PR_BGD, dtype=np.uint8)
+    mascara_gc[alpha > 200] = cv2.GC_FGD
+    mascara_gc[(alpha > 30) & (alpha <= 200)] = cv2.GC_PR_FGD
+    mascara_gc[alpha <= 30] = cv2.GC_BGD
+
+    modelo_fundo = np.zeros((1, 65), np.float64)
+    modelo_produto = np.zeros((1, 65), np.float64)
+
+    try:
+        cv2.grabCut(img_rgb, mascara_gc, None, modelo_fundo, modelo_produto,
+                    iteracoes, cv2.GC_INIT_WITH_MASK)
+    except cv2.error:
+        # Em imagens muito pequenas/uniformes o GrabCut pode falhar;
+        # nesse caso devolve a máscara original sem refinar, sem quebrar o app
+        return imagem_rgba
+
+    eh_produto = (mascara_gc == cv2.GC_FGD) | (mascara_gc == cv2.GC_PR_FGD)
+
+    # Zera onde o GrabCut decidiu que é fundo, mas preserva o valor
+    # original (com antialiasing suave) onde ele confirmou ser produto
+    alpha_refinado = np.where(eh_produto, alpha, 0).astype(np.uint8)
+
+    resultado = np.array(imagem_rgba).copy()
+    resultado[:, :, 3] = alpha_refinado
+
+    del img_rgb, alpha, mascara_gc, modelo_fundo, modelo_produto, eh_produto, alpha_refinado
+    return Image.fromarray(resultado)
+
+
 @st.cache_data(max_entries=2, ttl=CACHE_TTL_SEGUNDOS, show_spinner=False)
-def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao, modo_roupa, limite_lado):
+def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao, modo_roupa, limite_lado, usar_grabcut):
     img = redimensionar_para_processamento(imagem_bytes, limite_lado)
     sessao_ia = carregar_modelo_ia(modo_roupa)
 
@@ -150,6 +191,9 @@ def recortar_fundo(imagem_bytes, usar_alta_precisao, forca_desconexao, modo_roup
         recorte_bruto = remove(img, session=sessao_ia)
 
     recorte_limpo = limpar_itens_encostados(recorte_bruto, forca_desconexao)
+
+    if usar_grabcut:
+        recorte_limpo = refinar_com_grabcut(recorte_limpo)
 
     del img, recorte_bruto
     return recorte_limpo
@@ -187,6 +231,11 @@ forca_sep = st.sidebar.slider(
     help="O sistema já remove fundos 'fantasmas' automaticamente. Use este slider só quando algo ainda estiver ENCOSTADO no produto (clipe, papel) e for confundido como parte dele — aumente gradualmente até eles sumirem."
 )
 modo_precisao = st.sidebar.checkbox("✨ Modo Alta Precisão (Bordas mais suaves)", value=False)
+usar_grabcut = st.sidebar.checkbox(
+    "🔬 Refinamento Extra de Fundo (recomendado p/ cenários bagunçados)",
+    value=True,
+    help="Usa uma técnica clássica (não é IA, quase não pesa na RAM) para limpar pedaços de fundo que a IA deixou parcialmente visíveis. Deixe ligado; só desative se a foto for simples e o processamento estiver lento."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 Modo de Centralização")
@@ -211,7 +260,7 @@ if arquivo_enviado is not None:
     try:
         with st.spinner("🤖 IA processando, isolando e centralizando o produto..."):
             img_sem_fundo = recortar_fundo(
-                bytes_arquivo, modo_precisao, forca_sep, modo_roupa, LIMITE_LADO_PROCESSAMENTO
+                bytes_arquivo, modo_precisao, forca_sep, modo_roupa, LIMITE_LADO_PROCESSAMENTO, usar_grabcut
             )
 
             # --- CORTE ÓPTICO ANTI-FANTASMA ---
