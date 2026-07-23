@@ -23,6 +23,7 @@ ALPHA_MATTING_FG = 240             # alta precisão: primeiro plano
 ALPHA_MATTING_BG = 10              # alta precisão: fundo
 CACHE_TTL_SEGUNDOS = 600           # resultados processados expiram em 10 min
 MARGEM_SEGURANCA_PROCESSAMENTO = 1.3  # margem sobre o tamanho do fundo
+LADO_MINIMO_PROCESSAMENTO = 1100   # piso de resolução p/ a IA não perder detalhe em cenas complexas
 
 # Config da página
 st.set_page_config(page_title="Gerador Dm3 - Pro", page_icon="📦", layout="wide")
@@ -41,8 +42,13 @@ largura_fundo, altura_fundo = fundo_padrao.size
 # Como a imagem final SEMPRE é redimensionada para caber no fundo, não faz
 # sentido rodar a IA numa foto de 4000x3000px vindas de celular: isso é o
 # maior consumidor de RAM/tempo do app. Calculamos aqui o maior lado que
-# realmente precisamos processar, com uma margem de segurança.
-LIMITE_LADO_PROCESSAMENTO = int(max(largura_fundo, altura_fundo) * MARGEM_SEGURANCA_PROCESSAMENTO)
+# realmente precisamos processar, com uma margem de segurança — mas nunca
+# abaixo de LADO_MINIMO_PROCESSAMENTO, senão a IA perde detalhe fino em
+# cenas complexas (bordas finas, objetos de fundo parecidos com o produto).
+LIMITE_LADO_PROCESSAMENTO = max(
+    int(max(largura_fundo, altura_fundo) * MARGEM_SEGURANCA_PROCESSAMENTO),
+    LADO_MINIMO_PROCESSAMENTO,
+)
 
 
 # 2. Carregar Inteligência Artificial COM TRAVA DE MEMÓRIA
@@ -136,19 +142,32 @@ def refinar_com_grabcut(imagem_rgba, iteracoes=3):
     """
     Refina a máscara usando GrabCut (OpenCV) — corte de grafo clássico,
     SEM nenhum modelo de IA adicional. Custo de RAM desprezível comparado
-    a trocar de modelo. Ajuda muito quando o fundo é bagunçado e a IA
-    deixa pedaços parcialmente transparentes "grudados" no produto.
+    a trocar de modelo.
+
+    Importante: só o NÚCLEO bem interno do objeto (obtido por erosão forte)
+    é marcado como "certeza absoluta de produto". Bordas e áreas onde algo
+    do fundo ficou grudado na máscara da IA entram como "provável produto",
+    não "certeza" — isso dá liberdade para o GrabCut rebaixar esses pontos
+    para fundo quando a cor/textura não bate com o núcleo real do produto.
     """
     img_rgb = np.array(imagem_rgba.convert("RGB"))
     alpha = np.array(imagem_rgba)[:, :, 3]
 
-    # Mapa de certezas a partir da máscara que a IA já gerou:
-    # muito opaco = com certeza produto | muito transparente = com certeza fundo
-    # intermediário = incerto, o GrabCut decide olhando cor e textura reais
-    mascara_gc = np.full(alpha.shape, cv2.GC_PR_BGD, dtype=np.uint8)
-    mascara_gc[alpha > 200] = cv2.GC_FGD
-    mascara_gc[(alpha > 30) & (alpha <= 200)] = cv2.GC_PR_FGD
-    mascara_gc[alpha <= 30] = cv2.GC_BGD
+    _, binaria = cv2.threshold(alpha, LIMIAR_ALPHA_MASCARA, 255, cv2.THRESH_BINARY)
+
+    # Kernel proporcional ao tamanho da imagem (funciona bem tanto em fotos
+    # pequenas quanto grandes, já que agora a resolução de processamento varia)
+    lado_kernel = max(5, int(min(binaria.shape) * 0.04))
+    if lado_kernel % 2 == 0:
+        lado_kernel += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (lado_kernel, lado_kernel))
+
+    nucleo_certo = cv2.erode(binaria, kernel, iterations=2)  # certeza real de produto
+    halo = cv2.dilate(binaria, kernel, iterations=2)         # fora disso, certeza de fundo
+
+    mascara_gc = np.full(alpha.shape, cv2.GC_PR_FGD, dtype=np.uint8)  # padrão: incerto
+    mascara_gc[halo == 0] = cv2.GC_BGD
+    mascara_gc[nucleo_certo == 255] = cv2.GC_FGD
 
     modelo_fundo = np.zeros((1, 65), np.float64)
     modelo_produto = np.zeros((1, 65), np.float64)
@@ -162,15 +181,13 @@ def refinar_com_grabcut(imagem_rgba, iteracoes=3):
         return imagem_rgba
 
     eh_produto = (mascara_gc == cv2.GC_FGD) | (mascara_gc == cv2.GC_PR_FGD)
-
-    # Zera onde o GrabCut decidiu que é fundo, mas preserva o valor
-    # original (com antialiasing suave) onde ele confirmou ser produto
     alpha_refinado = np.where(eh_produto, alpha, 0).astype(np.uint8)
 
     resultado = np.array(imagem_rgba).copy()
     resultado[:, :, 3] = alpha_refinado
 
-    del img_rgb, alpha, mascara_gc, modelo_fundo, modelo_produto, eh_produto, alpha_refinado
+    del img_rgb, alpha, binaria, nucleo_certo, halo, mascara_gc
+    del modelo_fundo, modelo_produto, eh_produto, alpha_refinado
     return Image.fromarray(resultado)
 
 
